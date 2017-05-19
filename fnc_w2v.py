@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Apr  6 21:28:33 2017
+Created on Thu May 18 10:51:26 2017
 
 @author: sz144
 """
+
 
 import re
 import numpy as np
@@ -11,13 +12,12 @@ from utils.dataset import DataSet
 from utils.generate_test_splits import split
 from utils.score import report_score
 import time
+from nltk.corpus import stopwords
+
 import os
-#from sklearn.linear_model import LogisticRegression
-#from sklearn import svm
-#from utils.generate_test_splits import kfold_split, get_stances_for_folds
-#from utils.score import report_score, LABELS, score_submission
-#from utils.system import parse_params, check_version
 from sklearn.neural_network import MLPClassifier
+from sklearn import svm
+from sklearn.linear_model import LogisticRegression
 import gensim
 model = gensim.models.KeyedVectors.load_word2vec_format(\
 'GoogleNews-vectors-negative300.bin', binary=True)
@@ -30,6 +30,8 @@ data_splits = split(dataset)
 training_data = data_splits['training']
 dev_data = data_splits['dev']
 test_data = data_splits['test']
+stop = set(stopwords.words('english'))
+
 
 def preprocess(content):
     findword = re.compile('[a-z]+')
@@ -38,8 +40,10 @@ def preprocess(content):
     word_list = content.split()
     for word in word_list:
         new_word = findword.findall(word)
-        if new_word != [] and model.__contains__(new_word[0]):
-            temp_list.append(new_word[0])
+        if new_word !=[]:
+            w=new_word[0].lower()
+            if w not in stop and model.__contains__(w):
+                temp_list.append(w)
     return temp_list
 
 
@@ -56,13 +60,13 @@ def generate_features(stance):
     h = preprocess(stance['Headline'])
     b = preprocess(dataset.articles[stance['Body ID']])
     s = np.zeros((1,1))
-    if (h != [] and b != []):
+    if (h != [] and b != []):# calculate the cosine of headline and body
         s[0,0] = model.n_similarity(h,b)
     if (h != []):
         h_vector = to_vector(h)
     else:
         h_vector = np.zeros((1,300))
-    if (b != []):    
+    if (b != []):
         b_vector = to_vector(b)
     else:
         b_vector = np.zeros((1,300))
@@ -81,14 +85,16 @@ def label_convert(label):
     else:
         return 3
 
-train_feature_file = 'features\train_features.npy'
-train_label_file = 'features\train_labels.npy'
-dev_feature_file = 'features\dev_features.npy'
-dev_label_file = 'features\dev_labels.npy'
+train_feature_file = "features/train_features.npy"
+train_label_file = "features/train_labels.npy"
+dev_feature_file = "features/dev_features.npy"
+dev_label_file = "features/dev_labels.npy"
+test_feature_file = "features/test_features.npy"
+test_label_file = "features/test_labels.npy"
 
-# generate training data
+# generate training data features
 # load training data from file if exists
-if not os.path.isfile(train_feature_file) or not os.path.isfile(train_label_file):
+if ((not os.path.isfile(train_feature_file)) or (not os.path.isfile(train_label_file))):
     print("Extracting features for training data...")
     X = generate_features(training_data[0])
     labels = []
@@ -102,40 +108,67 @@ if not os.path.isfile(train_feature_file) or not os.path.isfile(train_label_file
     np.save(train_feature_file, X)
     np.save(train_label_file, labels)
 X=np.load(train_feature_file)
-label=np.load(train_label_file)
-    
+labels=np.load(train_label_file)
+
 print("Done in {}".format(str(time.time() - timing)))
 timing = time.time()
 
-# generate testing data
+# generate development data features
 # load data from file if exists
-if not os.path.isfile(dev_feature_file) or not os.path.isfile(dev_label_file):
-    print("Extracting features for testing data...")    
+if (not os.path.isfile(dev_feature_file)) or (not os.path.isfile(dev_label_file)):
+    print("Extracting features for development data...")
     dev_X = generate_features(dev_data[0])
     dev_labels = []
-    dev_labels.append(dev_data[0]['Stance'])
+    dev_labels.append(label_convert(dev_data[0]['Stance']))
     for i in range(1,len(dev_data)):
         stance = dev_data[i]
         features = generate_features(stance)
         dev_X = np.vstack((dev_X, features))
-        dev_labels.append(stance['Stance'])
+        dev_labels.append(label_convert(stance['Stance']))
     np.save(dev_feature_file, dev_X)
     np.save(dev_label_file, dev_labels)
 dev_X = np.load(dev_feature_file)
 dev_labels = np.load(dev_label_file)
 
 
+
+# generate test data features
+# load data from file if exists
+if (not os.path.isfile(test_feature_file)) or (not os.path.isfile(test_label_file)):
+    print("Extracting features for testing data...")
+    test_X = generate_features(test_data[0])
+    test_labels = []
+    test_labels.append(test_data[0]['Stance'])
+    for i in range(1,len(test_data)):
+        stance = test_data[i]
+        features = generate_features(stance)
+        test_X = np.vstack((test_X, features))
+        test_labels.append(stance['Stance'])
+    np.save(test_feature_file, test_X)
+    np.save(test_label_file, test_labels)
+test_X = np.load(test_feature_file)
+test_labels = np.load(test_label_file)
+
 print("Done in {}".format(str(time.time() - timing)))
 timing = time.time()
 
-# training 
+# training
 print("Training neural network...")
-nn_clf = MLPClassifier(hidden_layer_sizes=(300,4))
+nn_clf = MLPClassifier()
 nn_clf.fit(X, labels)
+
+#print("Training SVM...")
+#rbf_svc = svm.SVC(kernel='rbf')
+#rbf_svc.fit(X, labels)
+#lr_clf = LogisticRegression()
+#lr_clf.fit(X,labels)
+
 print("Done in {}".format(str(time.time() - timing)))
 timing = time.time()
+
 print("Evaluating...")
-pred = nn_clf.predict(dev_X)
+pred = nn_clf.predict(test_X)
+#pred = rbf_svc.predict(test_X)
 pred_labels = []
 for p in pred:
     if p == 0:
@@ -147,5 +180,5 @@ for p in pred:
     else:
         pred_labels.append('discuss')
 
-report_score(dev_labels,pred_labels)  
-print("Done in {}".format(str(time.time() - timing)))    
+report_score(test_labels,pred_labels)
+print("Done in {}".format(str(time.time() - timing)))
